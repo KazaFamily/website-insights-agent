@@ -1,0 +1,19 @@
+site:
+  url: "https://example.com"
+
+s3:
+  bucket: "your-bucket-name"
+  paths:
+    ga4: "data/ga4/"
+    search_console: "data/search-console/"
+
+email:
+  # Lambda function URL or SES endpoint
+  lambda_url: "https://your-lambda-url.lambda-url.us-east-1.on.aws/"
+  recipient: "you@example.com"
+  sender: "insights@example.com"
+
+model:
+  name: "gemini-2.0-flash"
+  temperature: 0.2
+  max_output_tokens: 8192
