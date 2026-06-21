@@ -1,0 +1,23 @@
+# ----------------------------------------
+# Traffic acquisition: Session source / medium
+# Account: sri-kaza.com
+# Property: sri-kaza.com
+# ----------------------------------------
+# 
+# All Users
+# Start date: 20260322
+# End date: 20260619
+Session source / medium,Sessions,Engaged sessions,Engagement rate,Average engagement time per session,Events per session,Event count,Key events,Session key event rate,Total revenue
+(direct) / (none),212,162,0.7641509433962265,28.11320754716981,12.320754716981131,2612,1,0.0047169811320754715,0
+google / organic,101,91,0.900990099009901,38.87128712871287,9.594059405940595,969,13,0.10891089108910891,0
+linkedin.com / referral,7,6,0.8571428571428571,19.142857142857142,7.428571428571429,52,1,0.14285714285714285,0
+bing / organic,3,3,1,20.333333333333332,7.666666666666667,23,0,0,0
+statics.teams.cdn.office.net / referral,3,2,0.6666666666666666,14,5.666666666666667,17,0,0,0
+mail.google.com / referral,2,2,1,0.5,5,10,0,0,0
+(not set),1,0,0,3,2,2,0,0,0
+duckduckgo / organic,1,1,1,26,5,5,0,0,0
+ig / social,1,1,1,6,6,6,0,0,0
+l.facebook.com / referral,1,1,1,43,8,8,0,0,0
+m.facebook.com / referral,1,1,1,0,5,5,0,0,0
+srikaza.substack.com / referral,1,1,1,20,8,8,0,0,0
+substack.com / referral,1,1,1,8,8,8,0,0,0
