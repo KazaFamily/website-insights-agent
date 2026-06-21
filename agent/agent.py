@@ -5,9 +5,12 @@ Uses raw Gemini API calls (no ADK/LangGraph) so it's straightforward
 to port tool definitions to AWS Bedrock later.
 """
 
+from http import client
 import os
 import yaml
-import google.generativeai as genai
+import pandas as pd
+from google import genai
+from google.genai import types
 
 from agent.tools.s3_reader import load_ga4_pages_data, load_ga4_traffic_data, load_search_console_pages_data, load_search_console_queries_data
 from agent.tools.analyzer import build_analysis_context
@@ -29,7 +32,7 @@ def load_config(path: str = "config.yaml") -> dict:
         return yaml.safe_load(f)
 
 
-def run_agent(config_path: str = "config.yaml") -> str:
+def run_agent(config_path: str = "config.yaml", local=False) -> str:
     """
     Full agent loop:
     1. Load data from S3
@@ -41,33 +44,31 @@ def run_agent(config_path: str = "config.yaml") -> str:
     cfg = load_config(config_path)
 
     # Configure Gemini — API key from environment variable
-    genai.configure(api_key=os.environ["GEMINI_API_KEY"])
-    model = genai.GenerativeModel(
-        model_name=cfg["model"]["name"],
-        system_instruction=SYSTEM_PROMPT,
-        generation_config={
-            "temperature": cfg["model"]["temperature"],
-            "max_output_tokens": cfg["model"]["max_output_tokens"],
-        },
-    )
+    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
     # --- Tool calls: load data ---
-    ga4_pages_df = load_ga4_pages_data(
-        bucket=cfg["s3"]["bucket"],
-        prefix=cfg["s3"]["paths"]["ga4_pages"],
-    )
-    ga4_traffic_df = load_ga4_traffic_data(
-        bucket=cfg["s3"]["bucket"],
-        prefix=cfg["s3"]["paths"]["ga4_traffic"],
-    )
-    sc_pages_df = load_search_console_pages_data(
-        bucket=cfg["s3"]["bucket"],
-        prefix=cfg["s3"]["paths"]["search_console_pages"],
-    )
-    sc_queries_df = load_search_console_queries_data(
-        bucket=cfg["s3"]["bucket"],
-        prefix=cfg["s3"]["paths"]["search_console_queries"],
-    )
+    if local:
+        ga4_pages_df = pd.read_csv("data/sample/Pages_and_screens_Page_title_and_screen_class_90_days.csv", skiprows=9)
+        ga4_traffic_df = pd.read_csv("data/sample/Traffic_acquisition_Session_source_medium_90_days.csv", skiprows=9)
+        sc_pages_df = pd.read_csv("data/sample/search_console_pages_3_months.csv")
+        sc_queries_df = pd.read_csv("data/sample/search_console_queries_3_months.csv")
+    else:
+        ga4_pages_df = load_ga4_pages_data(
+            bucket=cfg["s3"]["bucket"],
+            prefix=cfg["s3"]["paths"]["ga4_pages"],
+        )
+        ga4_traffic_df = load_ga4_traffic_data(
+            bucket=cfg["s3"]["bucket"],
+            prefix=cfg["s3"]["paths"]["ga4_traffic"],
+        )
+        sc_pages_df = load_search_console_pages_data(
+            bucket=cfg["s3"]["bucket"],
+            prefix=cfg["s3"]["paths"]["search_console_pages"],
+        )
+        sc_queries_df = load_search_console_queries_data(
+            bucket=cfg["s3"]["bucket"],
+            prefix=cfg["s3"]["paths"]["search_console_queries"],
+        )
 
     # --- Build prompt context ---
     context = build_analysis_context(
@@ -83,22 +84,30 @@ def run_agent(config_path: str = "config.yaml") -> str:
     )
 
     # --- Gemini call ---
-    response = model.generate_content(user_prompt)
+    response = client.models.generate_content(
+        model=cfg["model"]["name"],
+        contents=user_prompt,
+        config=types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            temperature=cfg["model"]["temperature"],
+            max_output_tokens=cfg["model"]["max_output_tokens"],
+        ),
+    )
     recommendations = response.text
 
     # --- Tool call: send email ---
-    body = format_email_body(cfg["site"]["url"], recommendations)
-    send_recommendations(
-        lambda_url=cfg["email"]["lambda_url"],
-        recipient=cfg["email"]["recipient"],
-        sender=cfg["email"]["sender"],
-        subject=f"Website Insights: {cfg['site']['url']}",
-        body=body,
-    )
+    #body = format_email_body(cfg["site"]["url"], recommendations)
+    #send_recommendations(
+    #    lambda_url=cfg["email"]["lambda_url"],
+    #    recipient=cfg["email"]["recipient"],
+    #    sender=cfg["email"]["sender"],
+    #    subject=f"Website Insights: {cfg['site']['url']}",
+    #    body=body,
+    #)
 
     return recommendations
 
 
 if __name__ == "__main__":
-    result = run_agent()
+    result = run_agent(local=True)
     print(result)
