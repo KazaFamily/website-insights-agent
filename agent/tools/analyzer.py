@@ -1,87 +1,265 @@
 """
-Summarizes GA4 and Search Console DataFrames into plain-text context
-that the agent can pass to Gemini.
+Summarizes Two GA4 and Two Search Console DataFrames into plain-text 
+context that the agent passes to an LLM for recommendation generation.
 """
 
 import pandas as pd
 
 
-def summarize_ga4(df: pd.DataFrame) -> str:
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _clean_ctr(df: pd.DataFrame, col: str = "CTR") -> pd.DataFrame:
+    """Convert CTR from '4.92%' string to float 4.92 (percentage points)."""
+    if col in df.columns:
+        df = df.copy()
+        df[col] = pd.to_numeric(df[col].astype(str).str.rstrip("%"), errors="coerce")
+    return df
+
+
+# ── GA4: Pages & Screens ──────────────────────────────────────────────────────
+
+def summarize_ga4_pages(df: pd.DataFrame, top_n: int = 10) -> str:
     """
-    Return a text summary of GA4 data suitable for inclusion in a prompt.
-    Expected columns: date, page_path, sessions, bounce_rate, avg_session_duration
-    Adjust column names to match your actual GA4 export schema.
+    Summarize the GA4 'Pages and screens' export.
+
+    Expected columns (after skiprows=9):
+        Page title and screen class, Views, Active users,
+        Views per active user, Average engagement time per active user,
+        Event count, Key events, Total revenue
     """
     if df.empty:
-        return "No GA4 data available."
+        return "No GA4 pages data available."
 
-    lines = [f"GA4 summary ({len(df)} rows):"]
+    lines = [f"GA4 Pages & Screens ({len(df)} pages, last 90 days):"]
 
-    if "sessions" in df.columns:
-        lines.append(f"  Total sessions: {df['sessions'].sum():,}")
+    # Total views
+    if "Views" in df.columns:
+        lines.append(f"  Total views: {df['Views'].sum():,}")
 
-    if "page_path" in df.columns and "sessions" in df.columns:
-        top_pages = (
-            df.groupby("page_path")["sessions"]
+    # Total active users (deduplicated estimate)
+    if "Active users" in df.columns:
+        lines.append(f"  Total active users: {df['Active users'].sum():,}")
+
+    # Top pages by views
+    if "Page title and screen class" in df.columns and "Views" in df.columns:
+        top = (
+            df.groupby("Page title and screen class")["Views"]
             .sum()
             .sort_values(ascending=False)
-            .head(5)
+            .head(top_n)
         )
-        lines.append("  Top 5 pages by sessions:")
-        for path, sessions in top_pages.items():
-            lines.append(f"    {path}: {sessions:,}")
+        lines.append(f"\n  Top {top_n} pages by views:")
+        for title, views in top.items():
+            lines.append(f"    {title[:80]}: {views:,} views")
 
-    if "bounce_rate" in df.columns:
-        avg_bounce = df["bounce_rate"].mean()
-        lines.append(f"  Avg bounce rate: {avg_bounce:.1%}")
+    # High-engagement pages (avg engagement time > 60s, at least 5 active users)
+    eng_col = "Average engagement time per active user"
+    if eng_col in df.columns and "Active users" in df.columns:
+        engaged = df[
+            (df[eng_col] > 60) & (df["Active users"] >= 5)
+        ].sort_values(eng_col, ascending=False).head(5)
+        if not engaged.empty:
+            lines.append("\n  High-engagement pages (>60s avg, 5+ users):")
+            for _, row in engaged.iterrows():
+                title = str(row["Page title and screen class"])[:70]
+                lines.append(
+                    f"    {title}: {row[eng_col]:.0f}s avg, "
+                    f"{row['Active users']:.0f} users"
+                )
+
+    # Low-engagement pages with decent traffic (potential content issues)
+    if eng_col in df.columns and "Views" in df.columns:
+        low_eng = df[
+            (df[eng_col] < 15) & (df["Views"] >= 20)
+        ].sort_values("Views", ascending=False).head(5)
+        if not low_eng.empty:
+            lines.append("\n  Low-engagement pages (<15s avg, 20+ views) — possible issues:")
+            for _, row in low_eng.iterrows():
+                title = str(row["Page title and screen class"])[:70]
+                lines.append(
+                    f"    {title}: {row[eng_col]:.0f}s avg, "
+                    f"{row['Views']:.0f} views"
+                )
 
     return "\n".join(lines)
 
 
-def summarize_search_console(df: pd.DataFrame) -> str:
+# ── GA4: Traffic Acquisition ──────────────────────────────────────────────────
+
+def summarize_ga4_traffic(df: pd.DataFrame) -> str:
     """
-    Return a text summary of Search Console data suitable for inclusion in a prompt.
-    Expected columns: query, page, clicks, impressions, ctr, position
-    Adjust column names to match your actual Search Console export schema.
+    Summarize the GA4 'Traffic acquisition' export.
+
+    Expected columns (after skiprows=9):
+        Session source / medium, Sessions, Engaged sessions,
+        Engagement rate, Average engagement time per session,
+        Events per session, Event count, Key events,
+        Session key event rate, Total revenue
     """
     if df.empty:
-        return "No Search Console data available."
+        return "No GA4 traffic data available."
 
-    lines = [f"Search Console summary ({len(df)} rows):"]
+    lines = [f"GA4 Traffic Acquisition ({len(df)} sources, last 90 days):"]
 
-    if "clicks" in df.columns:
-        lines.append(f"  Total clicks: {df['clicks'].sum():,}")
-    if "impressions" in df.columns:
-        lines.append(f"  Total impressions: {df['impressions'].sum():,}")
+    source_col = "Session source / medium"
 
-    if "query" in df.columns and "clicks" in df.columns:
-        top_queries = (
-            df.groupby("query")["clicks"]
-            .sum()
-            .sort_values(ascending=False)
-            .head(10)
+    if "Sessions" in df.columns:
+        total = df["Sessions"].sum()
+        lines.append(f"  Total sessions: {total:,}")
+
+        # Sessions by source
+        top_sources = df.sort_values("Sessions", ascending=False).head(8)
+        lines.append("\n  Sessions by source:")
+        for _, row in top_sources.iterrows():
+            pct = (row["Sessions"] / total * 100) if total > 0 else 0
+            eng = f", engagement rate: {row['Engagement rate']:.0%}" if "Engagement rate" in df.columns else ""
+            key_events = f", key events: {int(row['Key events'])}" if "Key events" in df.columns else ""
+            lines.append(
+                f"    {row[source_col]}: {int(row['Sessions']):,} sessions "
+                f"({pct:.1f}%){eng}{key_events}"
+            )
+
+    # Best converting sources by key events (exclude very low traffic)
+    if "Key events" in df.columns and "Sessions" in df.columns:
+        converters = df[df["Sessions"] >= 5].sort_values(
+            "Session key event rate", ascending=False
+        ).head(3)
+        if not converters.empty and converters["Key events"].sum() > 0:
+            lines.append("\n  Best converting sources (by key event rate):")
+            for _, row in converters.iterrows():
+                if row["Key events"] > 0:
+                    lines.append(
+                        f"    {row[source_col]}: "
+                        f"{row['Session key event rate']:.1%} key event rate, "
+                        f"{int(row['Key events'])} events"
+                    )
+
+    return "\n".join(lines)
+
+
+# ── Search Console: Pages ─────────────────────────────────────────────────────
+
+def summarize_search_console_pages(df: pd.DataFrame) -> str:
+    """
+    Summarize the Search Console pages export.
+
+    Expected columns:
+        Top pages, Clicks, Impressions, CTR, Position
+
+    CTR is cleaned from '4.92%' string format automatically.
+    """
+    if df.empty:
+        return "No Search Console pages data available."
+
+    df = _clean_ctr(df)
+    lines = [f"Search Console — Pages ({len(df)} pages, last 90 days):"]
+
+    if "Clicks" in df.columns:
+        lines.append(f"  Total clicks: {df['Clicks'].sum():,}")
+    if "Impressions" in df.columns:
+        lines.append(f"  Total impressions: {df['Impressions'].sum():,}")
+
+    # Top pages by clicks
+    if "Clicks" in df.columns:
+        top = df.sort_values("Clicks", ascending=False).head(5)
+        lines.append("\n  Top 5 pages by clicks:")
+        for _, row in top.iterrows():
+            lines.append(
+                f"    {row['Top pages']}: {int(row['Clicks'])} clicks, "
+                f"{int(row['Impressions'])} impressions, "
+                f"pos {row['Position']:.1f}"
+            )
+
+    # High impression / low CTR — biggest content/title opportunities
+    if "Impressions" in df.columns and "CTR" in df.columns:
+        opportunities = df[
+            (df["Impressions"] > 200) & (df["CTR"] < 2.0)
+        ].sort_values("Impressions", ascending=False).head(5)
+        if not opportunities.empty:
+            lines.append(
+                "\n  High-impression / low-CTR pages — title or meta description opportunities:"
+            )
+            for _, row in opportunities.iterrows():
+                lines.append(
+                    f"    {row['Top pages']}: "
+                    f"{int(row['Impressions'])} impressions, "
+                    f"{row['CTR']:.2f}% CTR, "
+                    f"pos {row['Position']:.1f}"
+                )
+
+    return "\n".join(lines)
+
+
+# ── Search Console: Queries ───────────────────────────────────────────────────
+
+def summarize_search_console_queries(df: pd.DataFrame) -> str:
+    """
+    Summarize the Search Console queries export.
+
+    Expected columns:
+        Top queries, Clicks, Impressions, CTR, Position
+
+    CTR is cleaned from '4.92%' string format automatically.
+    """
+    if df.empty:
+        return "No Search Console queries data available."
+
+    df = _clean_ctr(df)
+    lines = [f"Search Console — Queries ({len(df)} queries, last 90 days):"]
+
+    if "Clicks" in df.columns:
+        lines.append(f"  Total clicks: {df['Clicks'].sum():,}")
+
+    # Top queries by clicks
+    top = df.sort_values("Clicks", ascending=False).head(10)
+    lines.append("\n  Top 10 queries by clicks:")
+    for _, row in top.iterrows():
+        lines.append(
+            f"    '{row['Top queries']}': {int(row['Clicks'])} clicks, "
+            f"{int(row['Impressions'])} impressions, "
+            f"pos {row['Position']:.1f}"
         )
-        lines.append("  Top 10 queries by clicks:")
-        for query, clicks in top_queries.items():
-            lines.append(f"    '{query}': {clicks:,} clicks")
 
-    if "position" in df.columns and "query" in df.columns:
-        # Queries ranking 4-10 with decent impressions — low-hanging fruit
+    # Near-top queries: ranking 5-30, impressions > 20, low/no clicks
+    # These are the best content improvement opportunities
+    if "Position" in df.columns and "Impressions" in df.columns:
         near_top = df[
-            (df["position"] >= 4)
-            & (df["position"] <= 10)
-            & (df.get("impressions", pd.Series(dtype=float)) > 100)
-        ]
+            (df["Position"] >= 5)
+            & (df["Position"] <= 30)
+            & (df["Impressions"] > 20)
+            & (df["Clicks"] == 0)
+        ].sort_values("Impressions", ascending=False).head(8)
         if not near_top.empty:
-            lines.append(f"  Queries ranking 4-10 with >100 impressions: {len(near_top)}")
+            lines.append(
+                "\n  Ranking but not clicking — content/title optimization opportunities:"
+            )
+            for _, row in near_top.iterrows():
+                lines.append(
+                    f"    '{row['Top queries']}': "
+                    f"{int(row['Impressions'])} impressions, "
+                    f"0 clicks, pos {row['Position']:.1f}"
+                )
 
     return "\n".join(lines)
 
 
-def build_analysis_context(ga4_df: pd.DataFrame, sc_df: pd.DataFrame, site_url: str) -> str:
-    """Combine all data summaries into a single context string for the agent prompt."""
+# ── Context Builder ───────────────────────────────────────────────────────────
+
+def build_analysis_context(
+    ga4_pages_df: pd.DataFrame,
+    ga4_traffic_df: pd.DataFrame,
+    sc_pages_df: pd.DataFrame,
+    sc_queries_df: pd.DataFrame,
+    site_url: str,
+) -> str:
+    """
+    Combine all four data summaries into a single context string
+    for the agent's Gemini prompt.
+    """
     return "\n\n".join([
         f"Site: {site_url}",
-        summarize_ga4(ga4_df),
-        summarize_search_console(sc_df),
+        summarize_ga4_pages(ga4_pages_df),
+        summarize_ga4_traffic(ga4_traffic_df),
+        summarize_search_console_pages(sc_pages_df),
+        summarize_search_console_queries(sc_queries_df),
     ])

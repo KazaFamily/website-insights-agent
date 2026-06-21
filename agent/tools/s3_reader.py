@@ -31,7 +31,7 @@ def list_files_in_prefix(bucket: str, prefix: str) -> list[str]:
     return keys
 
 
-def load_ga4_data(bucket: str, prefix: str) -> pd.DataFrame:
+def load_ga4_pages_data(bucket: str, prefix: str) -> pd.DataFrame:
     """
     Load and concatenate all GA4 CSV exports under the given S3 prefix.
     Returns an empty DataFrame if no files are found.
@@ -43,8 +43,31 @@ def load_ga4_data(bucket: str, prefix: str) -> pd.DataFrame:
     frames = [read_csv_from_s3(bucket, key) for key in csv_keys]
     return pd.concat(frames, ignore_index=True)
 
+def load_ga4_traffic_data(bucket: str, prefix: str) -> pd.DataFrame:
+    """
+    Load and concatenate all GA4 CSV exports under the given S3 prefix.
+    Returns an empty DataFrame if no files are found.
+    """
+    keys = list_files_in_prefix(bucket, prefix)
+    csv_keys = [k for k in keys if k.endswith(".csv")]
+    if not csv_keys:
+        return pd.DataFrame()
+    frames = [read_csv_from_s3(bucket, key) for key in csv_keys]
+    return pd.concat(frames, ignore_index=True)
 
-def load_search_console_data(bucket: str, prefix: str) -> pd.DataFrame:
+def load_search_console_pages_data(bucket: str, prefix: str) -> pd.DataFrame:
+    """
+    Load and concatenate all Search Console CSV exports under the given S3 prefix.
+    Returns an empty DataFrame if no files are found.
+    """
+    keys = list_files_in_prefix(bucket, prefix)
+    csv_keys = [k for k in keys if k.endswith(".csv")]
+    if not csv_keys:
+        return pd.DataFrame()
+    frames = [read_csv_from_s3(bucket, key) for key in csv_keys]
+    return pd.concat(frames, ignore_index=True)
+
+def load_search_console_queries_data(bucket: str, prefix: str) -> pd.DataFrame:
     """
     Load and concatenate all Search Console CSV exports under the given S3 prefix.
     Returns an empty DataFrame if no files are found.

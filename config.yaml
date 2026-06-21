@@ -1,12 +1,13 @@
 site:
-  url: "https://example.com"
+  url: "https://sri-kaza.com"
 
 s3:
-  bucket: "your-bucket-name"
+  bucket: "your-bucket"
   paths:
-    ga4: "data/ga4/"
-    search_console: "data/search-console/"
-
+    ga4_pages: "data/ga4/pages_90days.csv"
+    ga4_traffic: "data/ga4/traffic_90days.csv"
+    sc_pages: "data/search-console/sc_pages_90days.csv"
+    sc_queries: "data/search-console/sc_queries_90days.csv"
 email:
   # Lambda function URL or SES endpoint
   lambda_url: "https://your-lambda-url.lambda-url.us-east-1.on.aws/"

@@ -9,7 +9,7 @@ import os
 import yaml
 import google.generativeai as genai
 
-from agent.tools.s3_reader import load_ga4_data, load_search_console_data
+from agent.tools.s3_reader import load_ga4_pages_data, load_ga4_traffic_data, load_search_console_pages_data, load_search_console_queries_data
 from agent.tools.analyzer import build_analysis_context
 from agent.tools.email_sender import send_recommendations, format_email_body
 
@@ -52,22 +52,31 @@ def run_agent(config_path: str = "config.yaml") -> str:
     )
 
     # --- Tool calls: load data ---
-    ga4_df = load_ga4_data(
+    ga4_pages_df = load_ga4_pages_data(
         bucket=cfg["s3"]["bucket"],
-        prefix=cfg["s3"]["paths"]["ga4"],
+        prefix=cfg["s3"]["paths"]["ga4_pages"],
     )
-    sc_df = load_search_console_data(
+    ga4_traffic_df = load_ga4_traffic_data(
         bucket=cfg["s3"]["bucket"],
-        prefix=cfg["s3"]["paths"]["search_console"],
+        prefix=cfg["s3"]["paths"]["ga4_traffic"],
+    )
+    sc_pages_df = load_search_console_pages_data(
+        bucket=cfg["s3"]["bucket"],
+        prefix=cfg["s3"]["paths"]["search_console_pages"],
+    )
+    sc_queries_df = load_search_console_queries_data(
+        bucket=cfg["s3"]["bucket"],
+        prefix=cfg["s3"]["paths"]["search_console_queries"],
     )
 
     # --- Build prompt context ---
     context = build_analysis_context(
-        ga4_df=ga4_df,
-        sc_df=sc_df,
+        ga4_pages_df=ga4_pages_df,
+        ga4_traffic_df=ga4_traffic_df,
+        sc_pages_df=sc_pages_df,
+        sc_queries_df=sc_queries_df,
         site_url=cfg["site"]["url"],
     )
-
     user_prompt = (
         f"Here is the latest website data:\n\n{context}\n\n"
         "Please provide your top recommendations."
