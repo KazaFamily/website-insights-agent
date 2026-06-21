@@ -15,6 +15,6 @@ email:
   sender: "insights@example.com"
 
 model:
-  name: "gemini-2.0-flash"
+  name: "gemini-2.5-flash"
   temperature: 0.2
   max_output_tokens: 8192
