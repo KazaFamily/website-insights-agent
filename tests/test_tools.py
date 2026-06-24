@@ -3,17 +3,24 @@ Unit tests for tool functions.
 Uses sample DataFrames — no S3 or Gemini calls.
 """
 
+import json
+import os
+from unittest.mock import MagicMock, patch
+
 import pandas as pd
 import pytest
+import urllib.error
 
 from agent.tools.analyzer import (
+    build_analysis_context,
     summarize_ga4_pages,
     summarize_ga4_traffic,
     summarize_search_console_pages,
     summarize_search_console_queries,
-    build_analysis_context,
 )
 from agent.tools.email_sender import format_email_body
+from agent.tools.memory import get_memory, save_memory
+from agent.tools.page_fetcher import fetch_page_metadata, fetch_page_text
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -185,3 +192,144 @@ def test_format_email_body_includes_site_url():
     body = format_email_body("https://example.com", "Some recommendations.")
     assert "https://example.com" in body
     assert "Some recommendations." in body
+
+
+# ── Page Fetcher — live tests against sri-kaza.com/book ──────────────────────
+#
+# These hit the real site. The bot User-Agent triggers the pre-renderer so we
+# get actual HTML rather than the empty React shell.
+#
+# Known issues surfaced by these tests (as of 2026-06-22):
+#   - canonical points to homepage instead of self
+#   - meta_description is the generic homepage blurb, not page-specific
+
+LIVE_URL = "https://sri-kaza.com/book"
+
+
+@pytest.mark.live
+def test_live_fetch_page_metadata_title():
+    result = fetch_page_metadata(LIVE_URL)
+    assert "error" not in result
+    assert result["title"] == (
+        "Unconvention: A Small Business Strategy Guide | Award Winning, #1 Amazon Bestseller"
+    )
+
+
+@pytest.mark.live
+def test_live_fetch_page_metadata_canonical():
+    """Canonical points to homepage root — needs to be fixed in the pre-rendered HTML on the server."""
+    result = fetch_page_metadata(LIVE_URL)
+    assert result["canonical"] == "https://sri-kaza.com"  # TODO: should be LIVE_URL once server is fixed
+
+
+@pytest.mark.live
+def test_live_fetch_page_metadata_h1():
+    result = fetch_page_metadata(LIVE_URL)
+    assert result["h1s"] == ["The Strategy Guide Built for Small Business Owners"]
+
+
+@pytest.mark.live
+def test_live_fetch_page_metadata_h2s_present():
+    result = fetch_page_metadata(LIVE_URL)
+    assert len(result["h2s"]) >= 4
+    h2_text = " ".join(result["h2s"])
+    assert "Underdog" in h2_text
+
+
+@pytest.mark.live
+def test_live_fetch_page_text_truncated():
+    result = fetch_page_text(LIVE_URL)
+    assert "error" not in result
+    assert result["truncated"] is True
+    assert len(result["text"]) == 3000
+
+
+@pytest.mark.live
+def test_live_fetch_page_text_contains_expected_content():
+    result = fetch_page_text(LIVE_URL)
+    assert "Unconvention" in result["text"]
+    assert "small business" in result["text"].lower()
+
+
+# ── Page Fetcher — mocked unit tests ─────────────────────────────────────────
+
+_SAMPLE_HTML = """
+<html>
+<head>
+  <title>My Page Title</title>
+  <meta name="description" content="A great page description.">
+  <link rel="canonical" href="https://example.com/page">
+</head>
+<body>
+  <h1>Main Heading</h1>
+  <h2>Sub Heading One</h2>
+  <h2>Sub Heading Two</h2>
+  <p>Some body text here.</p>
+</body>
+</html>
+"""
+
+
+def _mock_response(html: str):
+    mock = MagicMock()
+    mock.read.return_value = html.encode("utf-8")
+    mock.headers.get_content_charset.return_value = "utf-8"
+    return mock
+
+
+@patch("agent.tools.page_fetcher.urllib.request.urlopen")
+def test_fetch_page_metadata_returns_expected_keys(mock_urlopen):
+    mock_urlopen.return_value = _mock_response(_SAMPLE_HTML)
+    result = fetch_page_metadata("https://example.com/page")
+    assert result["url"] == "https://example.com/page"
+    assert result["title"] == "My Page Title"
+    assert result["meta_description"] == "A great page description."
+    assert result["canonical"] == "https://example.com/page"
+    assert "Main Heading" in result["h1s"]
+    assert len(result["h2s"]) == 2
+
+
+@patch("agent.tools.page_fetcher.urllib.request.urlopen")
+def test_fetch_page_metadata_handles_error(mock_urlopen):
+    mock_urlopen.side_effect = urllib.error.URLError("connection refused")
+    result = fetch_page_metadata("https://example.com/page")
+    assert "error" in result
+    assert result["url"] == "https://example.com/page"
+
+
+@patch("agent.tools.page_fetcher.urllib.request.urlopen")
+def test_fetch_page_text_truncates_long_content(mock_urlopen):
+    long_body = "<p>" + ("x" * 4000) + "</p>"
+    mock_urlopen.return_value = _mock_response(f"<html><body>{long_body}</body></html>")
+    result = fetch_page_text("https://example.com/long")
+    assert result["truncated"] is True
+    assert len(result["text"]) == 3000
+
+
+@patch("agent.tools.page_fetcher.urllib.request.urlopen")
+def test_fetch_page_text_handles_error(mock_urlopen):
+    mock_urlopen.side_effect = urllib.error.URLError("timeout")
+    result = fetch_page_text("https://example.com/page")
+    assert "error" in result
+    assert result["url"] == "https://example.com/page"
+
+
+# ── Memory ────────────────────────────────────────────────────────────────────
+
+def test_save_and_get_memory_roundtrip(tmp_path):
+    memory_dir = str(tmp_path)
+    save_memory(
+        recommendations="Improve your title tags.",
+        pages_analyzed=["https://example.com/", "https://example.com/blog"],
+        memory_dir=memory_dir,
+    )
+    mem = get_memory(memory_dir=memory_dir)
+    assert mem["last_run"]["recommendations"] == "Improve your title tags."
+    assert "https://example.com/" in mem["last_run"]["pages_analyzed"]
+    assert "https://example.com/blog" in mem["page_analyses"]
+
+
+def test_get_memory_returns_defaults_when_missing(tmp_path):
+    mem = get_memory(memory_dir=str(tmp_path))
+    assert mem["last_run"] == {}
+    assert mem["page_analyses"] == {}
